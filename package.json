@@ -1,0 +1,39 @@
+{
+  "name": "urs_shop_server",
+  "version": "1.0.0",
+  "description": "This is Ecommerce server",
+  "main": "app.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/app.js --host 0.0.0.0 --port 5000",
+    "dev": "concurrently \"tsc -w\" \"  nodemon ./dist/app.js\" --host 0.0.0.0 --port 5000",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Aryan Seth",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cloudinary": "^2.8.0",
+    "cookie": "^1.0.2",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ioredis": "^5.7.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.12.1",
+    "multer": "^2.0.2",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^22.16.5",
+    "@types/sharp": "^0.31.1",
+    "concurrently": "^9.1.2",
+    "nodemon": "^3.1.9"
+  }
+}
