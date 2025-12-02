@@ -13,4 +13,5 @@ export const COOKIE_EXPIRY_DAYS = 3;
 export const MongoURI = process.env.MONGO_URI || "mongodb://localhost:27017/ursdb";
 export const ProdMongoURI = process.env.PRODUCTION_DB! as string;
 export const PING_TIME= Number(process.env.PING_TIME)|| 10 as number
+export const PING_URL=process.env.PING_URL as string;
 

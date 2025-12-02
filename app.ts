@@ -7,6 +7,7 @@ import {
   MongoURI,
   ProdMongoURI,
   PING_TIME,
+  PING_URL,
 } from "./src/constants/constants.js";
 import errorMiddleware from "./src/middlewares/errorMiddleware.js";
 import dbConnect from "./src/db/db.js";
@@ -23,7 +24,7 @@ app.use(cookieParser());
 // dbConnect(MongoURI);
 dbConnect(ProdMongoURI);
 
-
+app.get("/health",(req,res)=>{res.status(200).json({message:"Server Is healthy"})})
 // app.use("/api/v1/", userRoute);
 app.use("/api/v1/admin", adminRoutes);
 
@@ -32,9 +33,9 @@ app.use(errorMiddleware);
 const keepServerAwake = () => {
   setInterval(async () => {
     try {
-      await axios.get(process.env.PING_URL);
+      await axios.get(PING_URL);
       console.log("✅ Server pinged to prevent sleep");
-    } catch (error) {
+    } catch (error:any) {
       console.error("❌ Error pinging server:", error.message);
     }
   }, PING_TIME*60*1000); // Ping every 10 minutes
