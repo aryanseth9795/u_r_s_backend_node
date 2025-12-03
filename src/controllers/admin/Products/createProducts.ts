@@ -245,7 +245,7 @@ export const createProductAdmin = TryCatch(
       console.error("Invalid JSON in data:", err);
       return next(new ErrorHandler("Invalid JSON in data field", 400));
     }
-
+console.log(payload)
     const {
       name,
       brand,
