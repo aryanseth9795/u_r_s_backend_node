@@ -9,7 +9,7 @@ const router=express.Router();
 
 router.route("/getproducts").get(getAllProductsAdmin);
 router.route("/products/:id").get(getProductAdminById).put(updateStock);
-router.route("/addproduct").post(uploadProductImages,createProductAdmin);
+router.route("/products").post(uploadProductImages,createProductAdmin);
 
 
 export default router;
