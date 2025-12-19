@@ -12,6 +12,7 @@ import {
 import errorMiddleware from "./src/middlewares/errorMiddleware.js";
 import dbConnect from "./src/db/db.js";
 import adminRoutes from "./src/routes/admin/index.js";
+import { seedCategoriesTwoPhase } from "./src/mock/seeder.js";
 
 console.log(`Starting relay in ${ENVMODE} mode...`);
 
@@ -40,7 +41,8 @@ const keepServerAwake = () => {
     }
   }, PING_TIME*60*1000); // Ping every 10 minutes
 };
-keepServerAwake()
+keepServerAwake();
+// await seedCategoriesTwoPhase()
 // seedDummyOrders();
 app.listen(PORT, () => {
   console.log(`Relay ready on http://localhost:${PORT} in ${ENVMODE} mode.`);

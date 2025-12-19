@@ -36,11 +36,10 @@ export const adminLogin = TryCatch(
     if (user.role !== "admin") {
       return next(new ErrorHandler("Access denied. Admins only.", 403));
     }
-    console.log("Admin logged in:", mobilenumber);
+
     const token = generate_Access_Token({ id: user._id, role: user.role });
-    console.log("Generated access token:", token);
+
     const refreshToken = generate_Refresh_Token(token);
-    console.log(token, refreshToken);
 
     res.status(200).json({
       success: true,
