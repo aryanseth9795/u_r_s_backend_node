@@ -13,7 +13,7 @@
 //     const {
 //       search,
 //       categoryId,
-      
+
 //       brand,
 //       tags,
 //       minPrice,
@@ -22,7 +22,7 @@
 //     } = req.query as {
 //       search?: string;
 //       categoryId?: string;
-     
+
 //       brand?: string;
 //       tags?: string;
 //       minPrice?: string;
@@ -387,7 +387,6 @@
 //   }
 // );
 
-
 import { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import ErrorHandler from "../../../middlewares/ErrorHandler.js";
@@ -411,6 +410,8 @@ const getCatAndDescIds = async (id: string) => {
 // ---------- LIST ----------
 export const getAllProductsAdmin = TryCatch(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+
+    console.log(req.query);
     const page = Math.max(parseInt(req.query.page as string) || 1, 1);
     const limit = 20;
     const skip = (page - 1) * limit;
@@ -439,23 +440,33 @@ export const getAllProductsAdmin = TryCatch(
     }
 
     if (brand) {
-      const brands = brand.split(",").map((b) => b.trim()).filter(Boolean);
+      const brands = brand
+        .split(",")
+        .map((b) => b.trim())
+        .filter(Boolean);
       if (brands.length) match.brand = { $in: brands };
     }
 
     if (tags) {
-      const tagsArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
+      const tagsArr = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       if (tagsArr.length) match.tags = { $in: tagsArr };
     }
 
     if (inStock === "true") match["variants.stock"] = { $gt: 0 };
 
     const priceFilter: any = {};
-    const minP = minPrice !== undefined && minPrice !== "" ? Number(minPrice) : undefined;
-    const maxP = maxPrice !== undefined && maxPrice !== "" ? Number(maxPrice) : undefined;
+    const minP =
+      minPrice !== undefined && minPrice !== "" ? Number(minPrice) : undefined;
+    const maxP =
+      maxPrice !== undefined && maxPrice !== "" ? Number(maxPrice) : undefined;
 
-    if (typeof minP === "number" && !Number.isNaN(minP)) priceFilter.$gte = minP;
-    if (typeof maxP === "number" && !Number.isNaN(maxP)) priceFilter.$lte = maxP;
+    if (typeof minP === "number" && !Number.isNaN(minP))
+      priceFilter.$gte = minP;
+    if (typeof maxP === "number" && !Number.isNaN(maxP))
+      priceFilter.$lte = maxP;
 
     if (Object.keys(priceFilter).length > 0) {
       match["variants.sellingPrices"] = { $elemMatch: { price: priceFilter } };
@@ -465,7 +476,13 @@ export const getAllProductsAdmin = TryCatch(
     const hasSearch = typeof search === "string" && search.trim().length > 0;
     if (hasSearch) {
       const rg = new RegExp(esc(search!.trim()), "i");
-      match.$or = [{ name: rg }, { brand: rg }, { tags: rg }, { description: rg }, { slug: rg }];
+      match.$or = [
+        { name: rg },
+        { brand: rg },
+        { tags: rg },
+        { description: rg },
+        { slug: rg },
+      ];
     }
 
     const pipeline: any[] = [
@@ -526,14 +543,71 @@ export const getProductAdminById = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
     const id = req?.params?.id;
 
-    const product = await Product.findById(id).lean();
+    const product = await Product.findById(id)
+      .populate({
+        path: "categoryId",
+        select: "name parent level path isActive",
+        populate: {
+          path: "path",
+          select: "name level isActive",
+        },
+      })
+      .lean();
+
     if (!product) {
       next(new ErrorHandler("No Product Found", 404));
       return;
     }
+
+    // Extract category hierarchy
+    let category = null;
+    let subCategory = null;
+    let subSubCategory = null;
+
+    if (product.categoryId && typeof product.categoryId === "object") {
+      const categoryData = product.categoryId as any;
+
+      // Determine hierarchy based on level
+      if (categoryData.level === 0) {
+        // Top-level category only
+        category = categoryData.name;
+      } else if (categoryData.level === 1) {
+        // Subcategory: extract category from path
+        subCategory = categoryData.name;
+
+        if (Array.isArray(categoryData.path) && categoryData.path.length > 0) {
+          const cat = categoryData.path[0];
+          category = cat.name;
+        }
+      } else if (categoryData.level === 2) {
+        // Sub-subcategory: extract both from path
+        subSubCategory = categoryData.name;
+
+        if (Array.isArray(categoryData.path)) {
+          if (categoryData.path.length > 0) {
+            const cat = categoryData.path[0];
+            category = cat.name;
+          }
+          if (categoryData.path.length > 1) {
+            const subCat = categoryData.path[1];
+            subCategory = subCat.name;
+          }
+        }
+      }
+    }
+
+    // Remove categoryId from product and add structured hierarchy
+    const { categoryId, ...productWithoutCategoryId } = product as any;
+
+    console.log(productWithoutCategoryId.variants,"productWithoutCategoryId");
     res.status(200).json({
       success: true,
-      product,
+      product: {
+        ...productWithoutCategoryId,
+        category,
+        subCategory,
+        subSubCategory,
+      },
     });
   }
 );
@@ -573,7 +647,9 @@ const uploadImageBufferToCloudinary = async (
       },
       (error: any, result: any) => {
         if (error || !result) {
-          return reject(new Error("Cloudinary upload failed: " + (error?.message || "")));
+          return reject(
+            new Error("Cloudinary upload failed: " + (error?.message || ""))
+          );
         }
 
         const img: CloudinaryImage = {
@@ -600,7 +676,9 @@ const uploadManyImageBuffersToCloudinary = async (
   options: { folder: string }
 ): Promise<CloudinaryImage[]> => {
   if (!files || !files.length) return [];
-  return Promise.all(files.map((file) => uploadImageBufferToCloudinary(file, options)));
+  return Promise.all(
+    files.map((file) => uploadImageBufferToCloudinary(file, options))
+  );
 };
 
 // ---------- Controller ----------
@@ -618,12 +696,12 @@ export const createProductAdmin = TryCatch(
       next(new ErrorHandler("Invalid JSON in data field", 400));
       return;
     }
-console.log(payload)
+    console.log(payload);
     const {
       name,
       brand,
       slug,
-      categoryId, 
+      categoryId,
       tags,
       description,
       deliveryOption,
@@ -632,7 +710,12 @@ console.log(payload)
     } = payload || {};
 
     if (!name || !slug || !brand || !categoryId || !deliveryOption) {
-      next(new ErrorHandler("name, slug, brand, categoryId and deliveryOption are required", 400));
+      next(
+        new ErrorHandler(
+          "name, slug, brand, categoryId and deliveryOption are required",
+          400
+        )
+      );
       return;
     }
 
@@ -664,13 +747,21 @@ console.log(payload)
     const productImages = req.productImages;
 
     if (!productImages?.thumbnail) {
-      next(new ErrorHandler("Thumbnail image is required. Please upload a thumbnail.", 400));
+      next(
+        new ErrorHandler(
+          "Thumbnail image is required. Please upload a thumbnail.",
+          400
+        )
+      );
       return;
     }
 
-    const thumbnailCloud = await uploadImageBufferToCloudinary(productImages.thumbnail, {
-      folder: "urs/thumbnails",
-    });
+    const thumbnailCloud = await uploadImageBufferToCloudinary(
+      productImages.thumbnail,
+      {
+        folder: "urs/thumbnails",
+      }
+    );
 
     const variantImagesCloud: Record<number, CloudinaryImage[]> = {};
 
@@ -717,7 +808,12 @@ console.log(payload)
 
     for (const v of variantsForDb) {
       if (!Array.isArray(v.sellingPrices) || v.sellingPrices.length === 0) {
-        next(new ErrorHandler("Each variant must have at least one selling price tier", 400));
+        next(
+          new ErrorHandler(
+            "Each variant must have at least one selling price tier",
+            400
+          )
+        );
         return;
       }
     }
@@ -725,7 +821,10 @@ console.log(payload)
     const tagsArr: string[] = Array.isArray(tags)
       ? tags
       : typeof tags === "string"
-      ? tags.split(",").map((t: string) => t.trim()).filter(Boolean)
+      ? tags
+          .split(",")
+          .map((t: string) => t.trim())
+          .filter(Boolean)
       : [];
 
     const productDoc = {
