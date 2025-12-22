@@ -1,7 +1,8 @@
-import { NextFunction, Request,  Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import TryCatch from "../../utils/Trycatch.js";
 import ErrorHandler from "../../middlewares/ErrorHandler.js";
 import Product from "../../models/productModel.js";
+import Category from "../../models/categoryModel.js";
 
 export const getProductByID = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -18,86 +19,335 @@ export const getProductByID = TryCatch(
   }
 );
 
-
-export const getProductListUser=TryCatch(async(req:Request,res:Response,next:NextFunction)=>{
-
-const page = Math.max(parseInt(req.query.page as string) || 1, 1);
-    const limit = 20;
+export const getCategoryProducts = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { categoryId } = req.params;
+    const page = Math.max(parseInt(req.query.page as string) || 1, 1);
+    const limit = 10;
     const skip = (page - 1) * limit;
+
+    // Step 1: Verify the category exists and is level 0
+    const category = await Category.findOne({
+      _id: categoryId,
+      level: 0,
+      isActive: { $ne: false },
+    }).lean();
+
+    if (!category) {
+      return next(
+        new ErrorHandler(
+          "Category not found or is not a top-level category",
+          404
+        )
+      );
+    }
+
+    // Step 2: Count total products in this category
+    const totalProducts = await Product.countDocuments({
+      category: category.name,
+      isActive: { $ne: false },
+    });
+
+    // Step 3: Fetch paginated products
+    const products = await Product.find({
+      category: category.name,
+      isActive: { $ne: false },
+    })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .select("_id name brand thumbnail variants")
+      .lean();
+
+    // Step 4: Format products with only necessary variant fields
+    const formattedProducts = products.map((product) => ({
+      _id: product._id,
+      name: product.name,
+      brand: product.brand,
+      thumbnail: product.thumbnail,
+      variants: product.variants?.map((v: any) => ({
+        _id: v._id,
+        stock: v.stock,
+        mrp: v.mrp,
+        sellingPrices: v.sellingPrices,
+      })),
+    }));
+
+    const totalPages = Math.max(Math.ceil(totalProducts / limit), 1);
+
+    res.status(200).json({
+      success: true,
+      categoryId: category._id,
+      categoryName: category.name,
+      page,
+      limit,
+      totalProducts,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      products: formattedProducts,
+    });
+  }
+);
+
+export const getLandingPageProducts = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
+    // Step 1: Fetch all active categories at level 0
+    const level0Categories = await Category.find({
+      level: 0,
+      isActive: { $ne: false },
+    }).lean();
+
+    if (!level0Categories || level0Categories.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No categories found",
+        data: [],
+      });
+    }
+
+    // Step 2: For each category, fetch 10 products
+    const categoriesWithProducts = await Promise.all(
+      level0Categories.map(async (category) => {
+        const products = await Product.find({
+          category: category.name,
+          isActive: { $ne: false },
+        })
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .select("_id name brand thumbnail variants")
+          .lean();
+
+        // Project only necessary variant fields
+        const formattedProducts = products.map((product) => ({
+          _id: product._id,
+          name: product.name,
+          brand: product.brand,
+          thumbnail: product.thumbnail,
+          variants: product.variants?.map((v: any) => ({
+            _id: v._id,
+            stock: v.stock,
+            mrp: v.mrp,
+            sellingPrices: v.sellingPrices,
+          })),
+        }));
+
+        return {
+          categoryId: category._id,
+          categoryName: category.name,
+          products: formattedProducts,
+        };
+      })
+    );
+
+    // Step 3: Filter out categories with no products
+    const categoriesWithProductsFiltered = categoriesWithProducts.filter(
+      (cat) => cat.products.length > 0
+    );
+
+    res.status(200).json({
+      success: true,
+      totalCategories: categoriesWithProductsFiltered.length,
+      data: categoriesWithProductsFiltered,
+    });
+  }
+);
+
+export const getSimilarProducts = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { categoryId } = req.params;
+    const { excludeProductId } = req.query;
+    const limit = 10;
+
+    // Step 1: Verify the category exists and is level 2 (sub-sub-category)
+    const category = await Category.findOne({
+      _id: categoryId,
+      level: 2,
+      isActive: { $ne: false },
+    }).lean();
+
+    if (!category) {
+      return next(
+        new ErrorHandler("Category not found or is not a sub-sub-category", 404)
+      );
+    }
+
+    // Step 2: Build the query filter
+    const filter: any = {
+      subSubCategory: category.name,
+      isActive: { $ne: false },
+    };
+
+    // Optionally exclude a specific product (useful when showing "similar products" on a product page)
+    if (excludeProductId && typeof excludeProductId === "string") {
+      filter._id = { $ne: excludeProductId };
+    }
+
+    // Step 3: Fetch similar products
+    const products = await Product.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select("_id name brand thumbnail variants")
+      .lean();
+
+    // Step 4: Format products with only necessary variant fields
+    const formattedProducts = products.map((product) => ({
+      _id: product._id,
+      name: product.name,
+      brand: product.brand,
+      thumbnail: product.thumbnail,
+      variants: product.variants?.map((v: any) => ({
+        _id: v._id,
+        stock: v.stock,
+        mrp: v.mrp,
+        sellingPrices: v.sellingPrices,
+      })),
+    }));
+
+    res.status(200).json({
+      success: true,
+      categoryId: category._id,
+      categoryName: category.name,
+      totalProducts: formattedProducts.length,
+      products: formattedProducts,
+    });
+  }
+);
+
+export const searchProducts = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
     const {
-      search,
-      category,
-      subCategory,
-      subSubCategory,
+      q, // search query
+      categoryId,
+      subCategoryId,
+      subSubCategoryId,
       brand,
-      tags,
       minPrice,
       maxPrice,
       inStock,
+      sort = "relevance", // relevance, price_asc, price_desc, newest
+      page = "1",
+      limit = "20",
     } = req.query as {
-      search?: string;
-      category?: string;
-      subCategory?: string;
-      subSubCategory?: string;
+      q?: string;
+      categoryId?: string;
+      subCategoryId?: string;
+      subSubCategoryId?: string;
       brand?: string;
-      tags?: string;
       minPrice?: string;
       maxPrice?: string;
       inStock?: string;
+      sort?: string;
+      page?: string;
+      limit?: string;
     };
 
-    // -------- BASE MATCH (only active products) --------
-    const match: any = {
-      isActive: { $ne: false }, // true or undefined
+    const pageNum = Math.max(parseInt(page) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100); // max 100 items per page
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build aggregation pipeline
+    const pipeline: any[] = [];
+
+    // Step 1: Initial match - only active products
+    const initialMatch: any = {
+      isActive: { $ne: false },
     };
+    pipeline.push({ $match: initialMatch });
 
-    // -------- SEARCH MODE (search OR filters) --------
-    const hasSearch = typeof search === "string" && search.trim().length > 0;
+    // Step 2: Lookup category information
+    pipeline.push({
+      $lookup: {
+        from: "categories",
+        localField: "categoryId",
+        foreignField: "_id",
+        as: "categoryInfo",
+      },
+    });
 
-    if (hasSearch) {
-      // partial, case-insensitive search on brand/category/subcategory/keywords/name
-      const safe = search!.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(safe, "i");
+    // Unwind category info (each product has one category)
+    pipeline.push({
+      $unwind: {
+        path: "$categoryInfo",
+        preserveNullAndEmptyArrays: true,
+      },
+    });
 
-      match.$or = [
-        { brand: regex }, // brand name
-        { category: regex }, // main category (beauty, cosmetics, etc.)
-        { subCategory: regex }, // sub category
-        { subSubCategory: regex }, // sub-sub category
-        { tags: regex }, // keywords array
-        { name: regex }, // product name (extra nice UX)
-      ];
-    } else {
-      // -------- FILTER MODE (only when NO search) --------
+    // Step 3: Build match conditions
+    const matchConditions: any = {};
 
-      if (category) match.category = category;
-      if (subCategory) match.subCategory = subCategory;
-      if (subSubCategory) match.subSubCategory = subSubCategory;
+    // Text search mode
+    const hasSearchQuery = typeof q === "string" && q.trim().length > 0;
+    if (hasSearchQuery) {
+      matchConditions.$text = { $search: q!.trim() };
+    }
 
-      if (brand) {
-        const brands = brand
-          .split(",")
-          .map((b) => b.trim())
-          .filter(Boolean);
-        if (brands.length) match.brand = { $in: brands };
+    // Category filters (using lookup data)
+    if (categoryId) {
+      matchConditions["categoryInfo._id"] = categoryId;
+      matchConditions["categoryInfo.level"] = 0;
+    }
+
+    if (subCategoryId) {
+      // Find the subcategory and filter by its name
+      const subCategory = await Category.findOne({
+        _id: subCategoryId,
+        level: 1,
+        isActive: { $ne: false },
+      }).lean();
+
+      if (subCategory) {
+        matchConditions["categoryInfo._id"] = subCategory._id;
       }
+    }
 
-      if (tags) {
-        const tagsArr = tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean);
-        if (tagsArr.length) match.tags = { $in: tagsArr };
+    if (subSubCategoryId) {
+      // Find the sub-subcategory and filter by its name
+      const subSubCategory = await Category.findOne({
+        _id: subSubCategoryId,
+        level: 2,
+        isActive: { $ne: false },
+      }).lean();
+
+      if (subSubCategory) {
+        matchConditions["categoryInfo._id"] = subSubCategory._id;
       }
+    }
 
-      if (inStock === "true") {
-        match["variants.stock"] = { $gt: 0 };
+    // Brand filter
+    if (brand && brand.trim()) {
+      const brands = brand
+        .split(",")
+        .map((b) => b.trim())
+        .filter(Boolean);
+      if (brands.length === 1) {
+        matchConditions.brand = new RegExp(`^${brands[0]}$`, "i");
+      } else if (brands.length > 1) {
+        matchConditions.brand = {
+          $in: brands.map((b) => new RegExp(`^${b}$`, "i")),
+        };
       }
+    }
 
+    // Stock filter
+    if (inStock === "true") {
+      matchConditions["variants"] = {
+        $elemMatch: {
+          stock: { $gt: 0 },
+          isActive: { $ne: false },
+        },
+      };
+    }
+
+    // Price range filter
+    const minP = minPrice && minPrice !== "" ? Number(minPrice) : undefined;
+    const maxP = maxPrice && maxPrice !== "" ? Number(maxPrice) : undefined;
+
+    if (
+      (typeof minP === "number" && !Number.isNaN(minP)) ||
+      (typeof maxP === "number" && !Number.isNaN(maxP))
+    ) {
       const priceFilter: any = {};
-      const minP = minPrice && minPrice !== "" ? Number(minPrice) : undefined;
-      const maxP = maxPrice && maxPrice !== "" ? Number(maxPrice) : undefined;
-
       if (typeof minP === "number" && !Number.isNaN(minP)) {
         priceFilter.$gte = minP;
       }
@@ -105,65 +355,239 @@ const page = Math.max(parseInt(req.query.page as string) || 1, 1);
         priceFilter.$lte = maxP;
       }
 
-      if (Object.keys(priceFilter).length > 0) {
-        match["variants.sellingPrices"] = {
-          $elemMatch: { price: priceFilter },
-        };
-      }
+      matchConditions["variants.sellingPrices"] = {
+        $elemMatch: { price: priceFilter },
+      };
     }
 
-    // -------- AGGREGATION PIPELINE --------
-    const pipeline: any[] = [
-      { $match: match },
-      { $sort: { createdAt: -1 } }, // latest first
-      {
-        $facet: {
-          data: [
-            { $skip: skip },
-            { $limit: limit },
-            {
-              $project: {
+    // Apply match conditions
+    if (Object.keys(matchConditions).length > 0) {
+      pipeline.push({ $match: matchConditions });
+    }
+
+    // Step 4: Add text search score if searching
+    if (hasSearchQuery) {
+      pipeline.push({
+        $addFields: {
+          searchScore: { $meta: "textScore" },
+        },
+      });
+    }
+
+    // Step 5: Sorting
+    let sortStage: any = {};
+    switch (sort) {
+      case "price_asc":
+        sortStage = { "variants.sellingPrices.0.price": 1 };
+        break;
+      case "price_desc":
+        sortStage = { "variants.sellingPrices.0.price": -1 };
+        break;
+      case "newest":
+        sortStage = { createdAt: -1 };
+        break;
+      case "relevance":
+      default:
+        if (hasSearchQuery) {
+          sortStage = { searchScore: -1, createdAt: -1 };
+        } else {
+          sortStage = { createdAt: -1 };
+        }
+        break;
+    }
+    pipeline.push({ $sort: sortStage });
+
+    // Step 6: Facet for pagination and total count
+    pipeline.push({
+      $facet: {
+        data: [
+          { $skip: skip },
+          { $limit: limitNum },
+          {
+            $project: {
+              _id: 1,
+              name: 1,
+              brand: 1,
+              thumbnail: 1,
+              categoryInfo: {
                 _id: 1,
                 name: 1,
-                brand: 1,
-                thumbnail: 1,
-                variants: {
-                  $map: {
-                    input: "$variants",
-                    as: "v",
-                    in: {
-                      _id: "$$v._id",
-                      stock: "$$v.stock",
-                      mrp: "$$v.mrp",
-                      sellingPrices: "$$v.sellingPrices",
-                    },
+                level: 1,
+              },
+              variants: {
+                $map: {
+                  input: "$variants",
+                  as: "v",
+                  in: {
+                    _id: "$$v._id",
+                    stock: "$$v.stock",
+                    mrp: "$$v.mrp",
+                    sellingPrices: "$$v.sellingPrices",
                   },
                 },
               },
+              ...(hasSearchQuery && { searchScore: 1 }),
             },
-          ],
-          totalCount: [{ $count: "count" }],
-        },
+          },
+        ],
+        totalCount: [{ $count: "count" }],
       },
-    ];
+    });
 
+    // Execute aggregation
     const aggResult = await Product.aggregate(pipeline);
     const result = aggResult[0] || { data: [], totalCount: [] };
 
     const products = result.data || [];
     const totalProducts = result.totalCount[0]?.count || 0;
-    const totalPages = Math.max(Math.ceil(totalProducts / limit), 1);
+    const totalPages = Math.max(Math.ceil(totalProducts / limitNum), 1);
 
     res.status(200).json({
       success: true,
-      page,
-      limit,
+      searchQuery: q || null,
+      filters: {
+        categoryId: categoryId || null,
+        subCategoryId: subCategoryId || null,
+        subSubCategoryId: subSubCategoryId || null,
+        brand: brand || null,
+        priceRange:
+          minP || maxP ? { min: minP || null, max: maxP || null } : null,
+        inStock: inStock === "true",
+      },
+      sort,
+      page: pageNum,
+      limit: limitNum,
       totalProducts,
       totalPages,
-      hasNextPage: page < totalPages,
-      products, // [{ _id, name, brand, thumbnail, variants:[{ _id, stock, mrp, sellingPrices }] }]
+      hasNextPage: pageNum < totalPages,
+      hasPreviousPage: pageNum > 1,
+      products,
     });
+  }
+);
 
+export const searchSuggestions = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { q } = req.query as { q?: string };
 
+    // Validate query
+    if (!q || q.trim().length < 2) {
+      return res.status(200).json({
+        success: true,
+        message: "Query must be at least 2 characters",
+        suggestions: {
+          products: [],
+          brands: [],
+          categories: [],
+        },
+      });
+    }
 
-})
+    const query = q.trim();
+    const limit = 5; // Limit suggestions per category
+
+    // Create case-insensitive regex for prefix matching
+    // Using ^ anchor for better performance (uses index efficiently)
+    const prefixRegex = new RegExp(
+      `^${query.replace(/[.*+?^${}()|[\]\\]/g, "\\\\$&")}`,
+      "i"
+    );
+
+    // Also create a word-boundary regex for broader matches
+    const wordRegex = new RegExp(
+      `\\b${query.replace(/[.*+?^${}()|[\]\\]/g, "\\\\$&")}`,
+      "i"
+    );
+
+    try {
+      // Run all queries in parallel for speed
+      const [productSuggestions, brandSuggestions, categorySuggestions] =
+        await Promise.all([
+          // Product name suggestions
+          Product.find({
+            isActive: { $ne: false },
+            $or: [
+              { name: prefixRegex },
+              { name: wordRegex },
+              { tags: prefixRegex },
+            ],
+          })
+            .select("name _id thumbnail")
+            .sort({ name: 1 })
+            .limit(limit)
+            .lean(),
+
+          // Brand suggestions (distinct brands matching query)
+          Product.aggregate([
+            {
+              $match: {
+                isActive: { $ne: false },
+                brand: prefixRegex,
+              },
+            },
+            {
+              $group: {
+                _id: "$brand",
+                count: { $sum: 1 },
+              },
+            },
+            { $sort: { count: -1 } },
+            { $limit: limit },
+            {
+              $project: {
+                _id: 0,
+                name: "$_id",
+                count: 1,
+              },
+            },
+          ]),
+
+          // Category suggestions (from Category model)
+          Category.find({
+            isActive: { $ne: false },
+            name: prefixRegex,
+          })
+            .select("name _id level")
+            .sort({ level: 1, name: 1 })
+            .limit(limit)
+            .lean(),
+        ]);
+
+      // Format response
+      const suggestions = {
+        products: productSuggestions.map((p) => ({
+          id: p._id,
+          name: p.name,
+          thumbnail: p.thumbnail?.url || null,
+          type: "product",
+        })),
+        brands: brandSuggestions.map((b) => ({
+          name: b.name,
+          productCount: b.count,
+          type: "brand",
+        })),
+        categories: categorySuggestions.map((c) => ({
+          id: c._id,
+          name: c.name,
+          level: c.level,
+          type: "category",
+        })),
+      };
+
+      // Calculate total suggestions
+      const totalSuggestions =
+        suggestions.products.length +
+        suggestions.brands.length +
+        suggestions.categories.length;
+
+      res.status(200).json({
+        success: true,
+        query,
+        totalSuggestions,
+        suggestions,
+      });
+    } catch (error) {
+      return next(new ErrorHandler("Error fetching suggestions", 500));
+    }
+  }
+);
