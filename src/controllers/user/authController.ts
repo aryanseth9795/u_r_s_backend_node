@@ -14,20 +14,20 @@ import jwt from 'jsonwebtoken'
 export const userLogin = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
     const { mobilenumber, password } = req.body;
-
-    const user = await User.findOne({ mobilenumber }).select("+password");
-
+console.log(req.body);  
+    const user = await User.findOne({ mobilenumber}).select("+password");
+console.log(user);
     if (!user) {
       return next(
         new ErrorHandler("No Accounts Available for this Credentials", 404)
       );
     }
 
-    const isMatched = await bcrypt.compare(user.password, password);
-
+    const isMatched = await bcrypt.compare(password, user.password);
+console.log(isMatched);
     if (!isMatched)
       return next(
-        new ErrorHandler("No Accounts Available for this Credentials", 404)
+        new ErrorHandler("Invalid Credentials", 404)
       );
 
     const access_token = generate_Access_Token({ id: user._id, role: "user" });
@@ -55,7 +55,7 @@ export const userRegister = TryCatch(
       name,
       mobilenumber,
       password,
-      role: "admin",
+      role: "user",
     });
 
     res.status(201).json({

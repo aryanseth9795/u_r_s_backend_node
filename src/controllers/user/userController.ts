@@ -5,9 +5,9 @@ import ErrorHandler from "../../middlewares/ErrorHandler.js";
 
 export const getUserDetails = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
-    const id = req.user;
+    const id= req.user?.id;
     const user = await User.findById(id).lean();
-
+console.log(user,"hitted");
     if (!user) return next(new ErrorHandler("No User Found", 404));
     res
       .status(200)

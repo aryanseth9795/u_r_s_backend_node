@@ -7,12 +7,12 @@ import orderRoute from "./orderRoute.js";
 
 const router = express.Router();
 
-// Auth routes (public)
-router.use("/auth", authRoutes);
+
 
 // Product routes (public)
 router.use("/products", productRoute);
-
+// Auth routes (public)
+router.use("/auth", authRoutes);
 // Order routes (protected)
 router.use("/orders", orderRoute);
 

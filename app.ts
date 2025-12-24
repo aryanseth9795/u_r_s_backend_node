@@ -12,7 +12,7 @@ import {
 import errorMiddleware from "./src/middlewares/errorMiddleware.js";
 import dbConnect from "./src/db/db.js";
 import adminRoutes from "./src/routes/admin/index.js";
-import { seedCategoriesTwoPhase } from "./src/mock/seeder.js";
+import userRoutes from "./src/routes/user/index.js";
 
 console.log(`Starting relay in ${ENVMODE} mode...`);
 
@@ -26,7 +26,7 @@ app.use(cookieParser());
 dbConnect(ProdMongoURI);
 
 app.get("/health",(req,res)=>{res.status(200).json({message:"Server Is healthy"})})
-// app.use("/api/v1/", userRoute);
+app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/admin", adminRoutes);
 
 app.use(errorMiddleware);
@@ -42,8 +42,7 @@ const keepServerAwake = () => {
   }, PING_TIME*60*1000); // Ping every 10 minutes
 };
 keepServerAwake();
-// await seedCategoriesTwoPhase()
-// seedDummyOrders();
+
 app.listen(PORT, () => {
   console.log(`Relay ready on http://localhost:${PORT} in ${ENVMODE} mode.`);
 });

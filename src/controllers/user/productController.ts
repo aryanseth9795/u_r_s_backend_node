@@ -22,70 +22,134 @@ export const getProductByID = TryCatch(
 export const getCategoryProducts = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
     const { categoryId } = req.params;
-    const page = Math.max(parseInt(req.query.page as string) || 1, 1);
-    const limit = 10;
-    const skip = (page - 1) * limit;
 
-    // Step 1: Verify the category exists and is level 0
+    // Step 1: Verify the category exists
     const category = await Category.findOne({
       _id: categoryId,
-      level: 0,
       isActive: { $ne: false },
     }).lean();
 
     if (!category) {
-      return next(
-        new ErrorHandler(
-          "Category not found or is not a top-level category",
-          404
-        )
-      );
+      return next(new ErrorHandler("Category not found", 404));
     }
 
-    // Step 2: Count total products in this category
-    const totalProducts = await Product.countDocuments({
-      category: category.name,
+    const categoryLevel = category.level;
+
+    // Step 2: Handle based on category level
+    // If level 2 (leaf category), return products directly
+    if (categoryLevel === 2) {
+      const products = await Product.find({
+        categoryId: category._id,
+        isActive: { $ne: false },
+      })
+        .sort({ createdAt: -1 })
+        .limit(15)
+        .select("_id name brand thumbnail variants")
+        .lean();
+
+      // Format products with only necessary variant fields
+      const formattedProducts = products.map((product) => ({
+        _id: product._id,
+        name: product.name,
+        brand: product.brand,
+        thumbnail: product.thumbnail,
+        variants: product.variants?.map((v: any) => ({
+          _id: v._id,
+          stock: v.stock,
+          mrp: v.mrp,
+          sellingPrices: v.sellingPrices,
+        })),
+      }));
+
+      return res.status(200).json({
+        success: true,
+        level: categoryLevel,
+        categoryId: category._id,
+        categoryName: category.name,
+        totalProducts: formattedProducts.length,
+        products: formattedProducts,
+      });
+    }
+
+    // If level 0 or 1, find subcategories and return products grouped by subcategory
+    const subCategories = await Category.find({
+      parent: categoryId,
+      level: categoryLevel + 1,
       isActive: { $ne: false },
-    });
+    }).lean();
 
-    // Step 3: Fetch paginated products
-    const products = await Product.find({
-      category: category.name,
-      isActive: { $ne: false },
-    })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select("_id name brand thumbnail variants")
-      .lean();
+    if (!subCategories || subCategories.length === 0) {
+      return res.status(200).json({
+        success: true,
+        level: categoryLevel,
+        categoryId: category._id,
+        categoryName: category.name,
+        message: "No subcategories found",
+        data: [],
+      });
+    }
 
-    // Step 4: Format products with only necessary variant fields
-    const formattedProducts = products.map((product) => ({
-      _id: product._id,
-      name: product.name,
-      brand: product.brand,
-      thumbnail: product.thumbnail,
-      variants: product.variants?.map((v: any) => ({
-        _id: v._id,
-        stock: v.stock,
-        mrp: v.mrp,
-        sellingPrices: v.sellingPrices,
-      })),
-    }));
+    // Step 3: For each subcategory, fetch 15 products
+    const subCategoriesWithProducts = await Promise.all(
+      subCategories.map(async (subCategory) => {
+        // Find all descendant categories (the subcategory itself + its children)
+        const descendantCategories = await Category.find({
+          path: subCategory._id, // Categories whose path includes this subcategory
+          isActive: { $ne: false },
+        })
+          .select("_id")
+          .lean();
 
-    const totalPages = Math.max(Math.ceil(totalProducts / limit), 1);
+        // Build array of category IDs: subcategory + all its descendants
+        const categoryIds = [
+          subCategory._id,
+          ...descendantCategories.map((cat) => cat._id),
+        ];
+
+        // Find products linked to any of these categories
+        const products = await Product.find({
+          categoryId: { $in: categoryIds },
+          isActive: { $ne: false },
+        })
+          .sort({ createdAt: -1 })
+          .limit(15) // 15 products per subcategory
+          .select("_id name brand thumbnail variants")
+          .lean();
+
+        // Project only necessary variant fields
+        const formattedProducts = products.map((product) => ({
+          _id: product._id,
+          name: product.name,
+          brand: product.brand,
+          thumbnail: product.thumbnail,
+          variants: product.variants?.map((v: any) => ({
+            _id: v._id,
+            stock: v.stock,
+            mrp: v.mrp,
+            sellingPrices: v.sellingPrices,
+          })),
+        }));
+
+        return {
+          subCategoryId: subCategory._id,
+          subCategoryName: subCategory.name,
+          products: formattedProducts,
+        };
+      })
+    );
+
+    // Step 4: Filter out subcategories with no products
+    const subCategoriesWithProductsFiltered = subCategoriesWithProducts.filter(
+      (subCat) => subCat.products.length > 0
+    );
 
     res.status(200).json({
       success: true,
+      level: categoryLevel,
       categoryId: category._id,
       categoryName: category.name,
-      page,
-      limit,
-      totalProducts,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPreviousPage: page > 1,
-      products: formattedProducts,
+      totalSubCategories: subCategoriesWithProductsFiltered.length,
+      data: subCategoriesWithProductsFiltered,
     });
   }
 );
@@ -94,10 +158,10 @@ export const getLandingPageProducts = TryCatch(
   async (req: Request, res: Response, next: NextFunction) => {
     // Step 1: Fetch all active categories at level 0
     const level0Categories = await Category.find({
-      level: 0,
+      parent: { $eq: null },
       isActive: { $ne: false },
     }).lean();
-
+    // console.log(level0Categories)
     if (!level0Categories || level0Categories.length === 0) {
       return res.status(200).json({
         success: true,
@@ -109,8 +173,23 @@ export const getLandingPageProducts = TryCatch(
     // Step 2: For each category, fetch 10 products
     const categoriesWithProducts = await Promise.all(
       level0Categories.map(async (category) => {
+        // Find all descendant categories (children at level 1 and 2)
+        const descendantCategories = await Category.find({
+          path: category._id, // Categories whose path includes this category
+          isActive: { $ne: false },
+        })
+          .select("_id")
+          .lean();
+
+        // Build array of category IDs: parent + all descendants
+        const categoryIds = [
+          category._id,
+          ...descendantCategories.map((cat) => cat._id),
+        ];
+
+        // Find products linked to any of these categories
         const products = await Product.find({
-          category: category.name,
+          categoryId: { $in: categoryIds }, // Fixed: was 'category', now 'categoryId'
           isActive: { $ne: false },
         })
           .sort({ createdAt: -1 })
@@ -139,12 +218,12 @@ export const getLandingPageProducts = TryCatch(
         };
       })
     );
-
     // Step 3: Filter out categories with no products
     const categoriesWithProductsFiltered = categoriesWithProducts.filter(
       (cat) => cat.products.length > 0
     );
 
+    console.log(categoriesWithProductsFiltered);
     res.status(200).json({
       success: true,
       totalCategories: categoriesWithProductsFiltered.length,
@@ -174,7 +253,7 @@ export const getSimilarProducts = TryCatch(
 
     // Step 2: Build the query filter
     const filter: any = {
-      subSubCategory: category.name,
+      categoryId,
       isActive: { $ne: false },
     };
 
@@ -189,7 +268,7 @@ export const getSimilarProducts = TryCatch(
       .limit(limit)
       .select("_id name brand thumbnail variants")
       .lean();
-
+    console.log(products, "siml called");
     // Step 4: Format products with only necessary variant fields
     const formattedProducts = products.map((product) => ({
       _id: product._id,
@@ -241,21 +320,38 @@ export const searchProducts = TryCatch(
       page?: string;
       limit?: string;
     };
-
+    console.log("Query Parameters:", req.query);
     const pageNum = Math.max(parseInt(page) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100); // max 100 items per page
     const skip = (pageNum - 1) * limitNum;
+    console.log("Pagination:", { pageNum, limitNum, skip });
 
     // Build aggregation pipeline
     const pipeline: any[] = [];
 
-    // Step 1: Initial match - only active products
+    // Step 1: Initial match - must include $text search if present (MongoDB requirement)
     const initialMatch: any = {
       isActive: { $ne: false },
     };
+
+    // Text search mode - MUST be in first $match stage
+    const hasSearchQuery = typeof q === "string" && q.trim().length > 0;
+    if (hasSearchQuery) {
+      initialMatch.$text = { $search: q!.trim() };
+    }
+
     pipeline.push({ $match: initialMatch });
 
-    // Step 2: Lookup category information
+    // Step 2: Add text search score if searching (must be right after $text match)
+    if (hasSearchQuery) {
+      pipeline.push({
+        $addFields: {
+          searchScore: { $meta: "textScore" },
+        },
+      });
+    }
+
+    // Step 3: Lookup category information
     pipeline.push({
       $lookup: {
         from: "categories",
@@ -273,14 +369,8 @@ export const searchProducts = TryCatch(
       },
     });
 
-    // Step 3: Build match conditions
+    // Step 4: Build additional match conditions (filters)
     const matchConditions: any = {};
-
-    // Text search mode
-    const hasSearchQuery = typeof q === "string" && q.trim().length > 0;
-    if (hasSearchQuery) {
-      matchConditions.$text = { $search: q!.trim() };
-    }
 
     // Category filters (using lookup data)
     if (categoryId) {
@@ -360,18 +450,10 @@ export const searchProducts = TryCatch(
       };
     }
 
-    // Apply match conditions
+    // Apply additional match conditions (filters)
+    console.log("Match Conditions:", JSON.stringify(matchConditions, null, 2));
     if (Object.keys(matchConditions).length > 0) {
       pipeline.push({ $match: matchConditions });
-    }
-
-    // Step 4: Add text search score if searching
-    if (hasSearchQuery) {
-      pipeline.push({
-        $addFields: {
-          searchScore: { $meta: "textScore" },
-        },
-      });
     }
 
     // Step 5: Sorting
@@ -435,12 +517,18 @@ export const searchProducts = TryCatch(
     });
 
     // Execute aggregation
+    console.log("Pipeline Stages:", pipeline.length);
+    console.log("Full Pipeline:", JSON.stringify(pipeline, null, 2));
     const aggResult = await Product.aggregate(pipeline);
     const result = aggResult[0] || { data: [], totalCount: [] };
 
     const products = result.data || [];
     const totalProducts = result.totalCount[0]?.count || 0;
     const totalPages = Math.max(Math.ceil(totalProducts / limitNum), 1);
+    console.log("Results:", {
+      totalProducts,
+      productsReturned: products.length,
+    });
 
     res.status(200).json({
       success: true,
