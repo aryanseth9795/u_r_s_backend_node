@@ -6,9 +6,13 @@ import {
   getSimilarProducts,
   searchProducts,
   searchSuggestions,
+  getFilteredLandingProducts,
 } from "../../controllers/user/productController.js";
 
 const router = express.Router();
+
+// Filtered landing page products (20 from each level 0 category based on filter)
+router.get("/landing/filtered", getFilteredLandingProducts);
 
 // Landing page products (10 from each level 0 category)
 router.get("/landing", getLandingPageProducts);

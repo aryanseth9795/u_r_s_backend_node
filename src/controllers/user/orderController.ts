@@ -196,7 +196,33 @@ export const getOrdersList = TryCatch(
       .limit(30)
       .lean();
 
-    res.status(200).json({ success: true, orders });
+    // Populate only the first product's thumbnail and format response
+    const formattedOrders = await Promise.all(
+      orders.map(async (order) => {
+        let thumbnailUrl = null;
+
+        if (order.products && order.products.length > 0) {
+          const firstProduct = await Product.findById(
+            order.products[0].productId
+          )
+            .select("thumbnail")
+            .lean();
+
+          thumbnailUrl = firstProduct?.thumbnail?.secureUrl || null;
+        }
+
+        return {
+          _id: order._id,
+          thumbnail: thumbnailUrl,
+          status: order.status,
+          totalPrice: order.totalAmount,
+          numberOfProducts: order.products.length,
+          createdAt: order.createdAt,
+        };
+      })
+    );
+
+    res.status(200).json({ success: true, orders: formattedOrders });
   }
 );
 

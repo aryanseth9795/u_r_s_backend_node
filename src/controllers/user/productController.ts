@@ -679,3 +679,255 @@ export const searchSuggestions = TryCatch(
     }
   }
 );
+
+export const getFilteredLandingProducts = TryCatch(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { isCheap, isLatestProduct, isTopDiscount, topSeller } =
+      req.query as {
+        isCheap?: string;
+        isLatestProduct?: string;
+        isTopDiscount?: string;
+        topSeller?: string;
+      };
+
+    // Validate that only one filter is provided at a time
+    const filters = [isCheap, isLatestProduct, isTopDiscount, topSeller].filter(
+      (f) => f === "true"
+    );
+
+    if (filters.length === 0) {
+      return next(
+        new ErrorHandler(
+          "Please provide one filter: isCheap, isLatestProduct, isTopDiscount, or topSeller",
+          400
+        )
+      );
+    }
+
+    if (filters.length > 1) {
+      return next(
+        new ErrorHandler("Please provide only one filter at a time", 400)
+      );
+    }
+
+    // Step 1: Fetch all active categories at level 0
+    const level0Categories = await Category.find({
+      parent: { $eq: null },
+      isActive: { $ne: false },
+    }).lean();
+
+    if (!level0Categories || level0Categories.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No categories found",
+        data: [],
+      });
+    }
+
+    // Step 2: For each category, fetch products based on the filter
+    const categoriesWithProducts = await Promise.all(
+      level0Categories.map(async (category) => {
+        // Find all descendant categories (children at level 1 and 2)
+        const descendantCategories = await Category.find({
+          path: category._id,
+          isActive: { $ne: false },
+        })
+          .select("_id")
+          .lean();
+
+        // Build array of category IDs: parent + all descendants
+        const categoryIds = [
+          category._id,
+          ...descendantCategories.map((cat) => cat._id),
+        ];
+
+        let products: any[] = [];
+
+        // Apply filter based on query parameter
+        if (isCheap === "true") {
+          // Get products with lowest selling price
+          products = await Product.aggregate([
+            {
+              $match: {
+                categoryId: { $in: categoryIds },
+                isActive: { $ne: false },
+              },
+            },
+            {
+              $addFields: {
+                minSellingPrice: {
+                  $min: {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: "$variants",
+                          as: "variant",
+                          cond: { $ne: ["$$variant.isActive", false] },
+                        },
+                      },
+                      as: "v",
+                      in: {
+                        $min: {
+                          $map: {
+                            input: "$$v.sellingPrices",
+                            as: "sp",
+                            in: "$$sp.price",
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            { $sort: { minSellingPrice: 1 } },
+            { $limit: 20 },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                brand: 1,
+                thumbnail: 1,
+                variants: 1,
+              },
+            },
+          ]);
+        } else if (isLatestProduct === "true") {
+          // Get latest products by createdAt
+          products = await Product.find({
+            categoryId: { $in: categoryIds },
+            isActive: { $ne: false },
+          })
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select("_id name brand thumbnail variants")
+            .lean();
+        } else if (isTopDiscount === "true") {
+          // Get products with maximum discount
+          products = await Product.aggregate([
+            {
+              $match: {
+                categoryId: { $in: categoryIds },
+                isActive: { $ne: false },
+              },
+            },
+            {
+              $addFields: {
+                maxDiscount: {
+                  $max: {
+                    $map: {
+                      input: {
+                        $filter: {
+                          input: "$variants",
+                          as: "variant",
+                          cond: { $ne: ["$$variant.isActive", false] },
+                        },
+                      },
+                      as: "v",
+                      in: {
+                        $let: {
+                          vars: {
+                            mrp: "$$v.mrp",
+                            minPrice: {
+                              $min: {
+                                $map: {
+                                  input: "$$v.sellingPrices",
+                                  as: "sp",
+                                  in: "$$sp.price",
+                                },
+                              },
+                            },
+                          },
+                          in: {
+                            $cond: {
+                              if: { $gt: ["$$mrp", 0] },
+                              then: {
+                                $multiply: [
+                                  {
+                                    $divide: [
+                                      { $subtract: ["$$mrp", "$$minPrice"] },
+                                      "$$mrp",
+                                    ],
+                                  },
+                                  100,
+                                ],
+                              },
+                              else: 0,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            { $match: { maxDiscount: { $gt: 0 } } },
+            { $sort: { maxDiscount: -1 } },
+            { $limit: 20 },
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                brand: 1,
+                thumbnail: 1,
+                variants: 1,
+                maxDiscount: 1,
+              },
+            },
+          ]);
+        } else if (topSeller === "true") {
+          // Get top seller products (using createdAt as proxy for now)
+          // You can modify this to use actual sales data if available
+          products = await Product.find({
+            categoryId: { $in: categoryIds },
+            isActive: { $ne: false },
+          })
+            .sort({ createdAt: -1 })
+            .limit(20)
+            .select("_id name brand thumbnail variants")
+            .lean();
+        }
+
+        // Format products with only necessary variant fields
+        const formattedProducts = products.map((product) => ({
+          _id: product._id,
+          name: product.name,
+          brand: product.brand,
+          thumbnail: product.thumbnail,
+          variants: product.variants?.map((v: any) => ({
+            _id: v._id,
+            stock: v.stock,
+            mrp: v.mrp,
+            sellingPrices: v.sellingPrices,
+          })),
+        }));
+
+        return {
+          categoryId: category._id,
+          categoryName: category.name,
+          products: formattedProducts,
+        };
+      })
+    );
+
+    // Step 3: Filter out categories with no products
+    const categoriesWithProductsFiltered = categoriesWithProducts.filter(
+      (cat) => cat.products.length > 0
+    );
+
+    // Determine which filter was applied
+    let appliedFilter = "";
+    if (isCheap === "true") appliedFilter = "isCheap";
+    else if (isLatestProduct === "true") appliedFilter = "isLatestProduct";
+    else if (isTopDiscount === "true") appliedFilter = "isTopDiscount";
+    else if (topSeller === "true") appliedFilter = "topSeller";
+
+    res.status(200).json({
+      success: true,
+      filter: appliedFilter,
+      totalCategories: categoriesWithProductsFiltered.length,
+      data: categoriesWithProductsFiltered,
+    });
+  }
+);
